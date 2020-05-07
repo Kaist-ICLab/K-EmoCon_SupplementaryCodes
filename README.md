@@ -5,4 +5,7 @@ In this repository are supplementary codes for the K-EmoCon dataset. [[zenodo]](
 
 [Majority voting](https://github.com/Kaist-ICLab/K-EmoCon_SupplementaryCodes/blob/master/vote_majority.py)
 
-[Loading annotations saved as CSV files, computing Krippendorff's alphas (IRR), and plotting heatmaps](https://github.com/Kaist-ICLab/K-EmoCon_SupplementaryCodes/blob/master/utils.py)
+[Utilities](https://github.com/Kaist-ICLab/K-EmoCon_SupplementaryCodes/blob/master/utils.py)
+* Loading annotations saved as CSV files
+* computing Krippendorff's alphas (IRR)
+* Plotting heatmaps
