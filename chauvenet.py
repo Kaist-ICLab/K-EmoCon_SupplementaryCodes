@@ -1,14 +1,15 @@
 from scipy import special
 
+
 def criterion(data):
     '''
     Implements Chauvenet's criterion for outlier detection.
     
     * See: https://en.wikipedia.org/wiki/Chauvenet%27s_criterion
-    
+
     Parameters
     ----------
-    data: Pandas Dataframe or named Series
+    data: a Pandas DataFrame or named Series.
     
     Returns
     -------
