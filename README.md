@@ -9,3 +9,8 @@ In this repository are supplementary codes for the K-EmoCon dataset. [[zenodo]](
 * Loading annotations saved as CSV files
 * Computing Krippendorff's alpha (IRR)
 * Plotting heatmaps
+
+## Changelog
+
+@Jul 7, 2020: Updated vote_majority.py
+* Updated aggregate_by_majority_voting to support easier aggregation of external rater annotations.
