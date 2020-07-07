@@ -109,29 +109,33 @@ def aggregate_by_majority_voting(annotations):
 
     Parameters
     ----------
-    annotations: list of Pandas DataFrame
-
+    annotations: dict of the form {pid: a list of dataframes}.
+    
         * All dataframes in the list should contains annotations for one participant, each from 5 different raters.
-        For example, annotations == [r1, r2, r3, r4, r5], where r<n> is a dataframe of annotations from an n_th rater.
+        For example, list of dataframes == [r1, r2, r3, r4, r5], where r<n> is a dataframe of annotations from an n_th rater.
 
         * A dataframe in the list must have a column named 'rid', which contains a unique number indentifying a rater.
 
     Returns
     -------
-    aggregated: a Pandas Dataframe of annotations aggregated by majority voting.
+    aggregated_annotations: a Pandas Dataframe of annotations aggregated by majority voting.
     
     '''
     
-    # first concatenate dataframes along index (vertically), ignoring indices without sorting
-    concatenated = pd.concat(annotations, ignore_index=True, sort=False)
+    aggregated_annotations = {}
+    for pid in annotations:
+        annotations_list = annotations[pid]
 
-    # set multilevel index with columns 'rid' and 'seconds', then group the entire dataframe by 'seconds'
-    grouped = concatenated.set_index(['rid', 'seconds']).groupby('seconds')
+        # first concatenate dataframes along index (vertically), ignoring indices without sorting
+        concatenated = pd.concat(annotations_list, ignore_index=True, sort=False)
 
-    # apply get_rater_agreement function to a grouped dataframe
-    aggregated = grouped.apply(get_rater_agreement)
+        # set multilevel index with columns 'rid' and 'seconds', then group the entire dataframe by 'seconds'
+        grouped = concatenated.set_index(['rid', 'seconds']).groupby('seconds')
 
-    # reset the 'seconds' column set as the index of aggregated dataframe
-    aggregated.reset_index(inplace=True)
+        # apply get_rater_agreement function to a grouped dataframe
+        aggregated = grouped.apply(get_rater_agreement)
 
-    return aggregated
+        # reset the 'seconds' column set as the index of aggregated dataframe
+        aggregated_annotations[pid] = aggregated.reset_index()
+
+    return aggregated_annotations
