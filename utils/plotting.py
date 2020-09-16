@@ -11,7 +11,7 @@ from scipy import stats
 
 def get_annotations(savepath, external=False):
     '''
-    Read annoations saved as CSV.
+    Load annoations saved as CSV.
 
     Parameters
     ----------
