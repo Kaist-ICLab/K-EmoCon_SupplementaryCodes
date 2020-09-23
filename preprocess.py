@@ -4,9 +4,10 @@ import logging
 import argparse
 import numpy as np
 import pandas as pd
+
 from collections import namedtuple
 from datetime import datetime, timedelta
-from utils.logging import ltnow
+from utils.logging import init_logger
 
 
 def aggregate_raw(paths, valid_pids):
@@ -23,6 +24,7 @@ def aggregate_raw(paths, valid_pids):
         pid_to_raw_df (dict of int: pandas DataFrame): maps participant IDs to DataFrames containing raw data.
 
     '''
+    logger = logging.getLogger('default')
     e4_dir, h7_dir = paths['e4_dir'], paths['h7_dir']
     pid_to_raw_df = {}
 
@@ -50,7 +52,7 @@ def aggregate_raw(paths, valid_pids):
                 pid_to_raw_df[filekey] = data
 
             except Exception as err:
-                print(f'Following exception occurred while processing {filekey}: {err}')
+                logger.warning(f'Following exception occurred while processing {filekey}: {err}')
 
     # store raw h7 data
     for pid in valid_pids:
@@ -63,7 +65,7 @@ def aggregate_raw(paths, valid_pids):
             pid_to_raw_df[filekey] = pd.read_csv(filepath)
 
         except Exception as err:
-            print(f'Following exception occurred while processing {filekey}: {err}')
+            logger.warning(f'Following exception occurred while processing {filekey}: {err}')
 
     return pid_to_raw_df
 
@@ -86,6 +88,7 @@ def get_baseline_and_debate(paths, valid_pids, filetypes, pid_to_raw_df):
         pid_to_debate_raw (dict of int: pandas DataFrame)
 
     '''
+    logger = logging.getLogger('default')
     subject_info_table = pd.read_csv(paths['subjects_info_path'], index_col='pid')
     pid_to_baseline_raw = {pid:dict() for pid in valid_pids}
     pid_to_debate_raw = {pid:dict() for pid in valid_pids}
@@ -107,7 +110,7 @@ def get_baseline_and_debate(paths, valid_pids, filetypes, pid_to_raw_df):
             try:
                 data = pid_to_raw_df[filekey]
             except KeyError as err:
-                print(f'Following exception occurred: {err}')
+                logger.warning(f'Following exception occurred: {err}')
                 continue
 
             # get baseline and debate portions of data
@@ -116,7 +119,7 @@ def get_baseline_and_debate(paths, valid_pids, filetypes, pid_to_raw_df):
 
             # skip the process if debate data is missing
             if debate.empty:
-                print(f'Debate data missing for {filekey}, skipped')
+                logger.warning(f'Debate data missing for {filekey}, skipped')
                 continue
             else:
                 # try storing data with corresponding filekeys and printing extra information
@@ -129,9 +132,9 @@ def get_baseline_and_debate(paths, valid_pids, filetypes, pid_to_raw_df):
                     pid_to_baseline_raw[pid][filetype] = baseline.set_index('timestamp').value
                     print(f'For {filekey}:\t baseline - {baseline_len}: {len(baseline):5} \t|\t debate - {debate_len}: {len(debate):5}')
                 except ValueError:
-                    print(f'Baseline data missing for {filekey} \t\t|\t debate - {debate_len}: {len(debate):5}')
-    print('-' * 80)
+                    print(f'WARNING - Baseline data missing for {filekey} \t|\t debate - {debate_len}: {len(debate):5}')
 
+    print('-' * 80)
     return pid_to_baseline_raw, pid_to_debate_raw
 
 
@@ -250,19 +253,14 @@ def make_debate_segments(paths, valid_pids, filetypes, pid_to_debate_raw):
 
 
 if __name__ == "__main__":
+    # initialize parser
     parser = argparse.ArgumentParser(description='Preprocess K-EmoCon dataset and save BVP, EDA, HST, and ECG signals as JSON files.')
     parser.add_argument('--root', '-r', type=str, required=True, help='a path to a root directory for the dataset')
     args = parser.parse_args()
 
-    logging.Formatter.converter = ltnow
-    logging.basicConfig(
-        format='[%(asctime)s] - %(message)s',
-        datefmt='%Y.%m.%d %H:%M:%S',
-        # datefmt='%m/%d/%Y %I:%M:%S %p',
-        level=logging.DEBUG
-    )
-
-    logging.info(f'Read/writing files to {args.root}...')
+    # initialize default logger and constants
+    logger = init_logger()
+    logger.info(f'Read/writing files to {args.root}...')
     PATHS = {
         'e4_dir': os.path.expanduser(os.path.join(args.root, 'raw/e4_data')),
         'h7_dir': os.path.expanduser(os.path.join(args.root, 'raw/neurosky_polar_data')),
@@ -275,13 +273,15 @@ if __name__ == "__main__":
     VALIDS = [1, 4, 5, 8, 9, 10, 11, 13, 14, 15, 16, 19, 22, 23, 24, 25, 26, 27, 28, 31, 32]
     FILETYPES = ['bvp', 'eda', 'hr', 'ibi', 'temp', 'ecg']
 
-    logging.info('Preprocessing started.')
-    logging.info('Aggregating raw files...')
+    # aggregate raw data
+    logger.info('Preprocessing started, aggregating raw files...')
     pid_to_raw_df = aggregate_raw(PATHS, VALIDS)
     
-    logging.info('Getting baseline and debate data...')
+    # get baseline and debate data
+    logger.info('Getting baseline and debate data...')
     _, pid_to_debate_raw = get_baseline_and_debate(PATHS, VALIDS, FILETYPES, pid_to_raw_df)
 
-    logging.info(f'Saving debate segments as JSON files to {PATHS["save_dir"]}...')
+    # save 5s-segments
+    logger.info(f'Saving debate segments as JSON files to {PATHS["save_dir"]}...')
     make_debate_segments(PATHS, VALIDS, FILETYPES, pid_to_debate_raw)
-    logging.info('Preprocessing complete.')
+    logger.info('Preprocessing complete.')
