@@ -278,4 +278,4 @@ if __name__ == "__main__":
     results = get_baseline_kfold(features, labels, args.seed, args.target, args.splits, args.shuffle)
     
     # print summary of classification results
-    print(results.groupby(level='Metric').mean())
+    print(results.groupby(level='Metric').mean().to_markdown())
