@@ -27,6 +27,8 @@ The last 6 digits are multiperspective emotion annotations associated with the s
 ### Baseline Classification
 [baseline.py](https://github.com/cheulyop/K-EmoCon_SupplementaryCodes/blob/master/baseline.py) implements a stratified k-fold baseline classification with four simple classifiers, which are [Gaussian NB](https://scikit-learn.org/stable/modules/generated/sklearn.naive_bayes.GaussianNB.html#sklearn-naive-bayes-gaussiannb), random voter, majority voter, and class ratio voter.
 
+\* `baseline.py` requires [PyTEAP](https://pypi.org/project/PyTEAP/) for feature extraction. You can install it via `pip install PyTEAP`.
+
 ```console
 $ python baseline.py --help
 usage: baseline.py [-h] --root ROOT [--seed SEED] [--target TARGET] [--length LENGTH] [--which WHICH] [--rolling] [--no_rolling] [--splits SPLITS] [--shuffle] [--no_shuffle]
