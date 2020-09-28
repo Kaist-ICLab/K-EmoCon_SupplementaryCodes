@@ -5,6 +5,7 @@ import argparse
 import warnings
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 
 from tqdm import tqdm
 from collections import OrderedDict
@@ -219,11 +220,42 @@ def pred_random(y_classes, y_test, seed, rng, ratios=None):
     return res
 
 
-def pred_GaussianNB(X_train, y_train, X_test, y_test):
+def pred_gnb(X_train, y_train, X_test, y_test):
     clf = GaussianNB()
     preds = clf.fit(X_train, y_train).predict(X_test)
     res = {
-        'acc.': clf.score(X_test, y_test),
+        'acc.': accuracy_score(y_test, preds),
+        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
+        'f1': f1_score(y_test, preds)
+    }
+    return res
+
+
+def pred_xgb(X_train, y_train, X_test, y_test, seed):
+    # load data into DMatrix
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtest = xgb.DMatrix(X_test, label=y_test)
+
+    # set parameters
+    params = {
+        'booster': 'gbtree',
+        'verbosity': 1,
+        'max_depth': 6,
+        'eta': 0.3,
+        'objective': 'multi:softmax',
+        'num_class': 2,
+        'eval_metric': 'auc',
+        'seed': seed,
+    }
+
+    # train model and predict
+    num_round = 100
+    bst = xgb.train(params, dtrain, num_round)
+    preds = bst.predict(dtest)
+    
+    # get results
+    res = {
+        'acc.': accuracy_score(y_test, preds),
         'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
         'f1': f1_score(y_test, preds)
     }
@@ -255,16 +287,17 @@ def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
         class_ratios = y_counts / y_train.size
 
         results[i+1] = {
-            'Gaussian NB': pred_GaussianNB(X_train, y_train, X_test, y_test),
             'Random': pred_random(y_classes, y_test, seed, rng),
             'Majority': pred_majority(majority, y_test),
-            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios)
+            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios),
+            'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
+            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
         }
 
     # return results as table
     results = {(fold, classifier): values for (fold, _results) in results.items() for (classifier, values) in _results.items()}
     results_table = pd.DataFrame.from_dict(results, orient='index').stack().unstack(level=1).rename_axis(['Fold', 'Metric'])
-    return results_table[['Gaussian NB', 'Random', 'Majority', 'Class ratio']]
+    return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB', 'XGBoost']]
 
 
 def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
@@ -293,12 +326,13 @@ def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
             'Random': pred_random(y_classes, y_test, seed, rng),
             'Majority': pred_majority(majority, y_test),
             'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios),
-            'Gaussian NB': pred_GaussianNB(X_train, y_train, X_test, y_test)
+            'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
+            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
         }
 
     results = {(pid, classifier): value for (pid, _results) in results.items() for (classifier, value) in _results.items()}
     results_table = pd.DataFrame.from_dict(results, orient='index').stack().unstack(level=1)
-    return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB']]
+    return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB', 'XGBoost']]
 
 
 def get_baseline(X, y, seed, target, cv, n_splits, shuffle):
