@@ -169,9 +169,7 @@ def prepare_kemocon(segments_dir, n, which_label, rolling):
     else:
         X, y = get_data_discrete(pid_to_segments, n, which_label)
 
-    features = np.concatenate(list(X.values()))
-    labels = np.concatenate(list(y.values()))
-    return features, labels
+    return X, y
 
 
 def pred_majority(majority, y_test):
@@ -205,16 +203,20 @@ def pred_GaussianNB(X_train, y_train, X_test, y_test):
     return res
 
 
-def get_baseline_kfold(X, y, seed, target_class, n_splits, shuffle):
-    # get labels corresponding to target class
-    if target_class == 'arousal':
-        y = y[:, 0]
-    elif target_class == 'valence':
-        y = y[:, 1]
-
+def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
     # initialize random number generator and fold generator
     rng = default_rng(seed)
     skf = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=seed)
+
+    # aggregated features and labels
+    X = np.concatenate(list(X.values()))
+    y = np.concatenate(list(y.values()))
+
+    # get labels corresponding to target class
+    if target == 'arousal':
+        y = y[:, 0]
+    elif target == 'valence':
+        y = y[:, 1]
 
     results = {}
     # for each fold, split train & test and get classification results
@@ -238,6 +240,49 @@ def get_baseline_kfold(X, y, seed, target_class, n_splits, shuffle):
     return results_table[['Gaussian NB', 'Random', 'Majority', 'Class ratio']]
 
 
+def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
+    # initialize random number generator
+    rng = default_rng(seed)
+
+    results = {}
+    # for each participant split train & test
+    for pid in X.keys():
+        X_train, X_test = np.concatenate([v for k, v in X.items() if k != pid]), X[pid]
+        y_train, y_test = np.concatenate([v for k, v in y.items() if k != pid]), y[pid]
+
+        # get labels corresponding to target class
+        if target == 'arousal':
+            y_train, y_test = y_train[:, 0], y_test[:, 0]
+        elif target == 'valence':
+            y_train, y_test = y_train[:, 1], y_test[:, 1]
+
+        # get majority label and class ratios
+        y_classes, y_counts = np.unique(y_train, return_counts=True)
+        majority = y_classes[np.argmax(y_counts)]
+        class_ratios = y_counts / y_train.size
+
+        # get classification results
+        results[pid] = {
+            'Random': pred_random(y_classes, y_test, seed, rng),
+            'Majority': pred_majority(majority, y_test),
+            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios),
+            'Gaussian NB': pred_GaussianNB(X_train, y_train, X_test, y_test)
+        }
+
+    results = {(pid, classifier): value for (pid, _results) in results.items() for (classifier, value) in _results.items()}
+    results_table = pd.DataFrame.from_dict(results, orient='index').stack().unstack(level=1)
+    return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB']]
+
+
+def get_baseline(X, y, seed, target, cvtype, n_splits, shuffle):
+    if cvtype == 'kfold':
+        results = get_baseline_kfold(X, y, seed, target, n_splits, shuffle)
+    elif cvtype == 'loso':
+        results = get_baseline_loso(X, y, seed, target, n_splits, shuffle)
+
+    return results
+
+
 if __name__ == "__main__":
     # initialize parser
     parser = argparse.ArgumentParser(description='Preprocess K-EmoCon dataset and get baseline classification results.')
@@ -245,19 +290,22 @@ if __name__ == "__main__":
     parser.add_argument('--seed', '-s', type=int, default=0, help='seed for random number generation')
     parser.add_argument('--target', '-t', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
     parser.add_argument('--length', '-l', type=int, default=5, help='number of consecutive 5s-signals in one segment')
-    parser.add_argument('--which', '-w', type=str, default='last', help='which label to set for segments, must be either "last" or "majority"')
+    parser.add_argument('--label', type=str, default='last', help='which label to set for segments, must be either "last" or "majority"')
     parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ...')
     parser.add_argument('--no_rolling', dest='rolling', action='store_false', help='get segments without rolling: e.g., s1=[0:n], s2=[n:2n], ...')
-    parser.add_argument('--splits', '-k', type=int, default=5, help='number of fold in k-fold stratified classification')
+    parser.add_argument('--cvtype', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso" (leave-one-subject-out)')
+    parser.add_argument('--splits', type=int, default=5, help='number of folds for k-fold stratified classification')
     parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle data before splitting to folds')
     parser.add_argument('--no_shuffle', dest='shuffle', action='store_false', help="don't shuffle data before splitting to folds")
     args = parser.parse_args()
 
+    # check input arguments
     if args.target not in ['valence', 'arousal']:
-        raise ValueError(f'target must be either "valence" or "arousal", but given {args.target}')
-
-    if args.which not in ['last', 'majority']:
-        raise ValueError(f'which must be either "last" or "majority", but given {args.which}')
+        raise ValueError(f'--target must be either "valence" or "arousal", but given {args.target}')
+    elif args.label not in ['last', 'majority']:
+        raise ValueError(f'--label must be either "last" or "majority", but given {args.label}')
+    elif args.cvtype not in ['kfold', 'loso']:
+        raise ValueError(f'--cvtype must be either "kfold" or "loso", but given {args.cvtype}')
 
     # initialize default logger
     logger = init_logger()
@@ -270,12 +318,12 @@ if __name__ == "__main__":
 
     # get features and labels
     segments_dir = os.path.expanduser(args.root)
-    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, which={args.which}, rolling={args.rolling}, splits={args.splits}, shuffle={args.shuffle}')
-    features, labels = prepare_kemocon(segments_dir, args.length, args.which, args.rolling)
+    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, rolling={args.rolling}, cvtype={args.cvtype}, splits={args.splits}, shuffle={args.shuffle}')
+    features, labels = prepare_kemocon(segments_dir, args.length, args.label, args.rolling)
     logger.info('Processing complete.')
 
     # get classification results
-    results = get_baseline_kfold(features, labels, args.seed, args.target, args.splits, args.shuffle)
+    results = get_baseline(features, labels, args.seed, args.target, args.cvtype, args.splits, args.shuffle)
     
     # print summary of classification results
     print(results.groupby(level='Metric').mean().to_markdown())
