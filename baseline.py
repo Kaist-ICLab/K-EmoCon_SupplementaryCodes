@@ -274,10 +274,10 @@ def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
     return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB']]
 
 
-def get_baseline(X, y, seed, target, cvtype, n_splits, shuffle):
-    if cvtype == 'kfold':
+def get_baseline(X, y, seed, target, cv, n_splits, shuffle):
+    if cv == 'kfold':
         results = get_baseline_kfold(X, y, seed, target, n_splits, shuffle)
-    elif cvtype == 'loso':
+    elif cv == 'loso':
         results = get_baseline_loso(X, y, seed, target, n_splits, shuffle)
 
     return results
@@ -293,7 +293,7 @@ if __name__ == "__main__":
     parser.add_argument('--label', type=str, default='last', help='which label to set for segments, must be either "last" or "majority"')
     parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ...')
     parser.add_argument('--no_rolling', dest='rolling', action='store_false', help='get segments without rolling: e.g., s1=[0:n], s2=[n:2n], ...')
-    parser.add_argument('--cvtype', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso" (leave-one-subject-out)')
+    parser.add_argument('--cv', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso" (leave-one-subject-out)')
     parser.add_argument('--splits', type=int, default=5, help='number of folds for k-fold stratified classification')
     parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle data before splitting to folds')
     parser.add_argument('--no_shuffle', dest='shuffle', action='store_false', help="don't shuffle data before splitting to folds")
@@ -304,8 +304,8 @@ if __name__ == "__main__":
         raise ValueError(f'--target must be either "valence" or "arousal", but given {args.target}')
     elif args.label not in ['last', 'majority']:
         raise ValueError(f'--label must be either "last" or "majority", but given {args.label}')
-    elif args.cvtype not in ['kfold', 'loso']:
-        raise ValueError(f'--cvtype must be either "kfold" or "loso", but given {args.cvtype}')
+    elif args.cv not in ['kfold', 'loso']:
+        raise ValueError(f'--cv must be either "kfold" or "loso", but given {args.cv}')
 
     # initialize default logger
     logger = init_logger()
@@ -318,12 +318,15 @@ if __name__ == "__main__":
 
     # get features and labels
     segments_dir = os.path.expanduser(args.root)
-    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, rolling={args.rolling}, cvtype={args.cvtype}, splits={args.splits}, shuffle={args.shuffle}')
+    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, rolling={args.rolling}, cv={args.cv}, splits={args.splits}, shuffle={args.shuffle}')
     features, labels = prepare_kemocon(segments_dir, args.length, args.label, args.rolling)
     logger.info('Processing complete.')
 
     # get classification results
-    results = get_baseline(features, labels, args.seed, args.target, args.cvtype, args.splits, args.shuffle)
+    results = get_baseline(features, labels, args.seed, args.target, args.cv, args.splits, args.shuffle)
     
     # print summary of classification results
-    print(results.groupby(level='Metric').mean().to_markdown())
+    if args.cv == 'kfold':
+        print(results.groupby(level='Metric').mean())
+    else:
+        print(results)
