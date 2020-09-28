@@ -83,9 +83,9 @@ def get_baseline_and_debate(paths, valid_pids, filetypes, pid_to_raw_df):
         filetypes (list of str)
 
     Returns:
-        pid_to_baseline_raw (dict of int: pandas DataFrame)
+        pid_to_baseline_raw (dict of int: (dict of str: pandas Series))
 
-        pid_to_debate_raw (dict of int: pandas DataFrame)
+        pid_to_debate_raw (dict of int: (dict of str: pandas Series))
 
     '''
     logger = logging.getLogger('default')
@@ -124,12 +124,12 @@ def get_baseline_and_debate(paths, valid_pids, filetypes, pid_to_raw_df):
             else:
                 # try storing data with corresponding filekeys and printing extra information
                 debate_len = datetime.fromtimestamp(max(debate.timestamp) // 1e3) - datetime.fromtimestamp(min(debate.timestamp) // 1e3)
-                pid_to_debate_raw[pid][filetype] = debate.set_index('timestamp').value
+                pid_to_debate_raw[pid][filetype] = debate.set_index('timestamp').value  # is a series
 
                 # however, baseline data might be missing, so take care of that
                 try:
                     baseline_len = datetime.fromtimestamp(max(baseline.timestamp) // 1e3) - datetime.fromtimestamp(min(baseline.timestamp) // 1e3)
-                    pid_to_baseline_raw[pid][filetype] = baseline.set_index('timestamp').value
+                    pid_to_baseline_raw[pid][filetype] = baseline.set_index('timestamp').value  # is a series
                     print(f'For {filekey}:\t baseline - {baseline_len}: {len(baseline):5} \t|\t debate - {debate_len}: {len(debate):5}')
                 except ValueError:
                     print(f'WARNING - Baseline data missing for {filekey} \t|\t debate - {debate_len}: {len(debate):5}')
@@ -138,10 +138,37 @@ def get_baseline_and_debate(paths, valid_pids, filetypes, pid_to_raw_df):
     return pid_to_baseline_raw, pid_to_debate_raw
 
 
-def make_debate_segments(paths, valid_pids, filetypes, pid_to_debate_raw):
+def baseline_to_json(paths, pid_to_baseline_raw):
+    save_dir = paths['baseline_dir']
+    # create a new directory if there isn't one already
+    os.makedirs(save_dir, exist_ok=True)
+
+    # for each participant
+    for pid, baseline in pid_to_baseline_raw.items():
+
+        # resample and interpolate ECG signals as they have duplicate entries while the intended frequency of ECG is 1Hz
+        if 'ecg' in baseline.keys():
+            ecg = baseline['ecg']
+            ecg.index = pd.DatetimeIndex(ecg.index * 1e6)
+            ecg = ecg.resample('1S').mean().interpolate(method='time')
+            ecg.index = ecg.index.astype(np.int64) // 1e6
+            baseline['ecg'] = ecg
+
+        # convert sig values to list
+        baseline = {sigtype: sig.values.tolist() for sigtype, sig in baseline.items() if sigtype in ['bvp', 'eda', 'temp', 'ecg']}
+
+        # save baseline as json file
+        savepath = os.path.join(save_dir, f'p{pid:02d}.json')
+        with open(savepath, 'w') as f:
+            json.dump(baseline, f, sort_keys=True, indent=4)
+
+    return
+
+
+def debate_segments_to_json(paths, valid_pids, filetypes, pid_to_debate_raw):
     subject_info_table = pd.read_csv(paths['subjects_info_path'], index_col='pid')
     Ratings = namedtuple('Ratings', ['values', 'len'])
-    save_dir = paths['save_dir']
+    save_dir = paths['segments_dir']
 
     # for each participant:
     print('-' * 100)
@@ -268,7 +295,8 @@ if __name__ == "__main__":
         'self_ratings_dir': os.path.expanduser(os.path.join(args.root, 'raw/emotion_annotations/self_annotations')),
         'partner_ratings_dir': os.path.expanduser(os.path.join(args.root, 'raw/emotion_annotations/partner_annotations')),
         'external_ratings_dir': os.path.expanduser(os.path.join(args.root, 'raw/emotion_annotations/aggregated_external_annotations')),
-        'save_dir': os.path.expanduser(os.path.join(args.root, 'segments')),
+        'baseline_dir': os.path.expanduser(os.path.join(args.root, 'baseline')),
+        'segments_dir': os.path.expanduser(os.path.join(args.root, 'segments')),
     }
     VALIDS = [1, 4, 5, 8, 9, 10, 11, 13, 14, 15, 16, 19, 22, 23, 24, 25, 26, 27, 28, 31, 32]
     FILETYPES = ['bvp', 'eda', 'hr', 'ibi', 'temp', 'ecg']
@@ -279,9 +307,13 @@ if __name__ == "__main__":
     
     # get baseline and debate data
     logger.info('Getting baseline and debate data...')
-    _, pid_to_debate_raw = get_baseline_and_debate(PATHS, VALIDS, FILETYPES, pid_to_raw_df)
+    pid_to_baseline_raw, pid_to_debate_raw = get_baseline_and_debate(PATHS, VALIDS, FILETYPES, pid_to_raw_df)
+
+    # save baseline data as json
+    logger.info(f'Saving baseline as JSON files to {PATHS["baseline_dir"]}...')
+    baseline_to_json(PATHS, pid_to_baseline_raw)
 
     # save 5s-segments
-    logger.info(f'Saving debate segments as JSON files to {PATHS["save_dir"]}...')
-    make_debate_segments(PATHS, VALIDS, FILETYPES, pid_to_debate_raw)
+    logger.info(f'Saving debate segments as JSON files to {PATHS["segments_dir"]}...')
+    debate_segments_to_json(PATHS, VALIDS, FILETYPES, pid_to_debate_raw)
     logger.info('Preprocessing complete.')

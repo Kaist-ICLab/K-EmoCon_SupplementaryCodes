@@ -5,6 +5,7 @@ import argparse
 import warnings
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 
 from tqdm import tqdm
 from collections import OrderedDict
@@ -57,7 +58,7 @@ def get_features(sig, sr, sigtype):
     return features
 
 
-def get_data_rolling(segments, n, which_label):
+def get_data_rolling(segments, n, labeltype, majority):
     X, y = {}, {}
 
     # for each participant
@@ -80,20 +81,33 @@ def get_data_rolling(segments, n, which_label):
             if np.isnan(features).any():
                 logging.getLogger('default').warning('One or more feature is NaN, skipped.')
                 continue
-
-            # take label of the last segment
-            if which_label == 'last':
-                labels = curr_segs[-1][-1]
-                a_val, v_val = int(labels[0]), int(labels[1])
-            # or take majority label
-            elif which_label == 'majority':
-                a_values, a_counts = np.unique([int(labels[0]) for _, _, labels in curr_segs], return_counts=True)
-                v_values, v_counts = np.unique([int(labels[1]) for _, _, labels in curr_segs], return_counts=True)
+            
+            if labeltype == 's':
+                curr_a = [int(labels[0]) for _, _, labels in curr_segs]
+                curr_v = [int(labels[1]) for _, _, labels in curr_segs]
+            elif labeltype == 'p':
+                curr_a = [int(labels[2]) for _, _, labels in curr_segs]
+                curr_v = [int(labels[3]) for _, _, labels in curr_segs]
+            elif labeltype == 'e':
+                curr_a = [int(labels[4]) for _, _, labels in curr_segs]
+                curr_v = [int(labels[5]) for _, _, labels in curr_segs]
+            elif labeltype == 'sp':
+                curr_a = [np.mean([int(labels[0]), int(labels[2])]) for _, _, labels in curr_segs]
+                curr_v = [np.mean([int(labels[1]), int(labels[3])]) for _, _, labels in curr_segs]
+            
+            # take majority label
+            if majority:
+                a_values, a_counts = np.unique(curr_a, return_counts=True)
+                v_values, v_counts = np.unique(curr_v, return_counts=True)
                 a_val = a_values[np.argmax(a_counts)]
                 v_val = v_values[np.argmax(v_counts)]
+            # or take label of the last segment
+            else:
+                a_val, v_val = curr_a[-1], curr_v[-1]
 
             curr_X.append(features)
-            curr_y.append([int(a_val > 3), int(v_val > 3)])
+            # curr_y.append([int(a_val > 3), int(v_val > 3)])
+            curr_y.append([int(a_val >= 3), int(v_val >= 3)])
 
         # stack features for current participant and apply min-max scaling
         X[pid] = StandardScaler().fit_transform(np.stack(curr_X))
@@ -102,7 +116,7 @@ def get_data_rolling(segments, n, which_label):
     return X, y
 
 
-def get_data_discrete(segments, n, which_label):
+def get_data_discrete(segments, n, labeltype, majority):
     X, y = {}, {}
 
     # for each participant
@@ -115,8 +129,21 @@ def get_data_discrete(segments, n, which_label):
         for idx, signals, labels in pbar:
             # get labels and add to buffer
             s_a, s_v = int(labels[0]), int(labels[1])
-            curr_segs.setdefault('a', []).append(s_a)
-            curr_segs.setdefault('v', []).append(s_v)
+            p_a, p_v = int(labels[2]), int(labels[3])
+            e_a, e_v = int(labels[4]), int(labels[5])
+
+            if labeltype == 's':
+                curr_segs.setdefault('a', []).append(s_a)
+                curr_segs.setdefault('v', []).append(s_v)
+            elif labeltype == 'p':
+                curr_segs.setdefault('a', []).append(p_a)
+                curr_segs.setdefault('v', []).append(p_v)
+            elif labeltype == 'e':
+                curr_segs.setdefault('a', []).append(e_a)
+                curr_segs.setdefault('v', []).append(e_v)
+            elif labeltype == 'sp':
+                curr_segs.setdefault('a', []).append(np.mean([s_a, p_a]))
+                curr_segs.setdefault('v', []).append(np.mean([s_v, p_v]))
 
             # get signals and add to buffer
             for sigtype, sr in [('bvp', 64), ('eda', 4), ('temp', 4), ('ecg', 1)]:
@@ -137,19 +164,20 @@ def get_data_discrete(segments, n, which_label):
                     logging.getLogger('default').warning('One or more feature is NaN, skipped.')
                     continue
 
-                # take label of the last segment
-                if which_label == 'last':
-                    a_val = curr_segs.pop('a')[-1]
-                    v_val = curr_segs.pop('v')[-1]
-                # or take majority label
-                elif which_label == 'majority':
+                # take majority label
+                if majority:
                     a_values, a_counts = np.unique(curr_segs.pop('a'), return_counts=True)
                     v_values, v_counts = np.unique(curr_segs.pop('v'), return_counts=True)
                     a_val = a_values[np.argmax(a_counts)]
                     v_val = v_values[np.argmax(v_counts)]
-
+                # or take label of the last segment
+                else:
+                    a_val = curr_segs.pop('a')[-1]
+                    v_val = curr_segs.pop('v')[-1]
+                
                 curr_X.append(features)
                 curr_y.append([int(a_val > 3), int(v_val > 3)])
+                # curr_y.append([int(a_val >= 3), int(v_val >= 3)])
                 pbar.set_postfix({'processed': idx // n})
 
         # stack features for current participant and apply min-max scaling
@@ -159,19 +187,17 @@ def get_data_discrete(segments, n, which_label):
     return X, y
 
 
-def prepare_kemocon(segments_dir, n, which_label, rolling):
+def prepare_kemocon(segments_dir, n, labeltype, majority, rolling):
     # load segments
     pid_to_segments = load_segments(segments_dir)
 
     # extract features and labels
     if rolling:
-        X, y = get_data_rolling(pid_to_segments, n, which_label)
+        X, y = get_data_rolling(pid_to_segments, n, labeltype, majority)
     else:
-        X, y = get_data_discrete(pid_to_segments, n, which_label)
+        X, y = get_data_discrete(pid_to_segments, n, labeltype, majority)
 
-    features = np.concatenate(list(X.values()))
-    labels = np.concatenate(list(y.values()))
-    return features, labels
+    return X, y
 
 
 def pred_majority(majority, y_test):
@@ -194,27 +220,62 @@ def pred_random(y_classes, y_test, seed, rng, ratios=None):
     return res
 
 
-def pred_GaussianNB(X_train, y_train, X_test, y_test):
+def pred_gnb(X_train, y_train, X_test, y_test):
     clf = GaussianNB()
     preds = clf.fit(X_train, y_train).predict(X_test)
     res = {
-        'acc.': clf.score(X_test, y_test),
+        'acc.': accuracy_score(y_test, preds),
         'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
         'f1': f1_score(y_test, preds)
     }
     return res
 
 
-def get_baseline_kfold(X, y, seed, target_class, n_splits, shuffle):
-    # get labels corresponding to target class
-    if target_class == 'arousal':
-        y = y[:, 0]
-    elif target_class == 'valence':
-        y = y[:, 1]
+def pred_xgb(X_train, y_train, X_test, y_test, seed):
+    # load data into DMatrix
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtest = xgb.DMatrix(X_test, label=y_test)
 
+    # set parameters
+    params = {
+        'booster': 'gbtree',
+        'verbosity': 1,
+        'max_depth': 6,
+        'eta': 0.3,
+        'objective': 'multi:softmax',
+        'num_class': 2,
+        'eval_metric': 'auc',
+        'seed': seed,
+    }
+
+    # train model and predict
+    num_round = 100
+    bst = xgb.train(params, dtrain, num_round)
+    preds = bst.predict(dtest)
+    
+    # get results
+    res = {
+        'acc.': accuracy_score(y_test, preds),
+        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
+        'f1': f1_score(y_test, preds)
+    }
+    return res
+
+
+def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
     # initialize random number generator and fold generator
     rng = default_rng(seed)
     skf = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=seed)
+
+    # aggregated features and labels
+    X = np.concatenate(list(X.values()))
+    y = np.concatenate(list(y.values()))
+
+    # get labels corresponding to target class
+    if target == 'arousal':
+        y = y[:, 0]
+    elif target == 'valence':
+        y = y[:, 1]
 
     results = {}
     # for each fold, split train & test and get classification results
@@ -226,16 +287,61 @@ def get_baseline_kfold(X, y, seed, target_class, n_splits, shuffle):
         class_ratios = y_counts / y_train.size
 
         results[i+1] = {
-            'Gaussian NB': pred_GaussianNB(X_train, y_train, X_test, y_test),
             'Random': pred_random(y_classes, y_test, seed, rng),
             'Majority': pred_majority(majority, y_test),
-            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios)
+            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios),
+            'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
+            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
         }
 
     # return results as table
     results = {(fold, classifier): values for (fold, _results) in results.items() for (classifier, values) in _results.items()}
     results_table = pd.DataFrame.from_dict(results, orient='index').stack().unstack(level=1).rename_axis(['Fold', 'Metric'])
-    return results_table[['Gaussian NB', 'Random', 'Majority', 'Class ratio']]
+    return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB', 'XGBoost']]
+
+
+def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
+    # initialize random number generator
+    rng = default_rng(seed)
+
+    results = {}
+    # for each participant split train & test
+    for pid in X.keys():
+        X_train, X_test = np.concatenate([v for k, v in X.items() if k != pid]), X[pid]
+        y_train, y_test = np.concatenate([v for k, v in y.items() if k != pid]), y[pid]
+
+        # get labels corresponding to target class
+        if target == 'arousal':
+            y_train, y_test = y_train[:, 0], y_test[:, 0]
+        elif target == 'valence':
+            y_train, y_test = y_train[:, 1], y_test[:, 1]
+
+        # get majority label and class ratios
+        y_classes, y_counts = np.unique(y_train, return_counts=True)
+        majority = y_classes[np.argmax(y_counts)]
+        class_ratios = y_counts / y_train.size
+
+        # get classification results
+        results[pid] = {
+            'Random': pred_random(y_classes, y_test, seed, rng),
+            'Majority': pred_majority(majority, y_test),
+            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios),
+            'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
+            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
+        }
+
+    results = {(pid, classifier): value for (pid, _results) in results.items() for (classifier, value) in _results.items()}
+    results_table = pd.DataFrame.from_dict(results, orient='index').stack().unstack(level=1)
+    return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB', 'XGBoost']]
+
+
+def get_baseline(X, y, seed, target, cv, n_splits, shuffle):
+    if cv == 'kfold':
+        results = get_baseline_kfold(X, y, seed, target, n_splits, shuffle)
+    elif cv == 'loso':
+        results = get_baseline_loso(X, y, seed, target, n_splits, shuffle)
+
+    return results
 
 
 if __name__ == "__main__":
@@ -244,20 +350,24 @@ if __name__ == "__main__":
     parser.add_argument('--root', '-r', type=str, required=True, help='path to the dataset directory')
     parser.add_argument('--seed', '-s', type=int, default=0, help='seed for random number generation')
     parser.add_argument('--target', '-t', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
-    parser.add_argument('--length', '-l', type=int, default=5, help='number of consecutive 5s-signals in one segment')
-    parser.add_argument('--which', '-w', type=str, default='last', help='which label to set for segments, must be either "last" or "majority"')
-    parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ...')
-    parser.add_argument('--no_rolling', dest='rolling', action='store_false', help='get segments without rolling: e.g., s1=[0:n], s2=[n:2n], ...')
-    parser.add_argument('--splits', '-k', type=int, default=5, help='number of fold in k-fold stratified classification')
-    parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle data before splitting to folds')
-    parser.add_argument('--no_shuffle', dest='shuffle', action='store_false', help="don't shuffle data before splitting to folds")
+    parser.add_argument('--length', '-n', type=int, default=5, help='number of consecutive 5s-signals in one segment')
+    parser.add_argument('--label', '-l', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner')
+    parser.add_argument('--majority', default=False, action='store_true', help='set majority label for segments, default is last')
+    parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ..., default is no rolling: e.g., s1=[0:n], s2=[n:2n], ...')
+    parser.add_argument('--cv', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso" (leave-one-subject-out)')
+    parser.add_argument('--splits', type=int, default=5, help='number of folds for k-fold stratified classification')
+    parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle data before splitting to folds, default is no shuffle')
     args = parser.parse_args()
 
+    # check commandline arguments
     if args.target not in ['valence', 'arousal']:
-        raise ValueError(f'target must be either "valence" or "arousal", but given {args.target}')
-
-    if args.which not in ['last', 'majority']:
-        raise ValueError(f'which must be either "last" or "majority", but given {args.which}')
+        raise ValueError(f'--target must be either "valence" or "arousal", but given {args.target}')
+    elif args.length < 5:
+        raise ValueError(f'--length must be greater than 5')
+    elif args.label not in ['s', 'p', 'e', 'sp']:
+        raise ValueError(f'--label must be either "s", "p", "e", or "sp", but given {args.label}')
+    elif args.cv not in ['kfold', 'loso']:
+        raise ValueError(f'--cv must be either "kfold" or "loso", but given {args.cv}')
 
     # initialize default logger
     logger = init_logger()
@@ -270,12 +380,15 @@ if __name__ == "__main__":
 
     # get features and labels
     segments_dir = os.path.expanduser(args.root)
-    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, which={args.which}, rolling={args.rolling}, splits={args.splits}, shuffle={args.shuffle}')
-    features, labels = prepare_kemocon(segments_dir, args.length, args.which, args.rolling)
+    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, majority={args.majority}, rolling={args.rolling}, cv={args.cv}, splits={args.splits}, shuffle={args.shuffle}')
+    features, labels = prepare_kemocon(segments_dir, args.length, args.label, args.majority, args.rolling)
     logger.info('Processing complete.')
 
     # get classification results
-    results = get_baseline_kfold(features, labels, args.seed, args.target, args.splits, args.shuffle)
+    results = get_baseline(features, labels, args.seed, args.target, args.cv, args.splits, args.shuffle)
     
     # print summary of classification results
-    print(results.groupby(level='Metric').mean().to_markdown())
+    if args.cv == 'kfold':
+        print(results.groupby(level='Metric').mean())
+    else:
+        print(results)
