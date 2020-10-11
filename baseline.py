@@ -19,7 +19,7 @@ from pyteap.signals.bvp import acquire_bvp, get_bvp_features
 from pyteap.signals.gsr import acquire_gsr, get_gsr_features
 from pyteap.signals.hst import acquire_hst, get_hst_features
 from pyteap.signals.ecg import get_ecg_features
-from pyteap.utils.logging import init_logger
+from utils.logging import init_logger
 
 
 def load_segments(segments_dir):
@@ -348,8 +348,9 @@ if __name__ == "__main__":
     # initialize parser
     parser = argparse.ArgumentParser(description='Preprocess K-EmoCon dataset and get baseline classification results.')
     parser.add_argument('--root', '-r', type=str, required=True, help='path to the dataset directory')
+    parser.add_argument('--timezone', '-t', type=str, default='UTC', help='a pytz timezone string for logger, default is UTC')
     parser.add_argument('--seed', '-s', type=int, default=0, help='seed for random number generation')
-    parser.add_argument('--target', '-t', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
+    parser.add_argument('--target', '-g', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
     parser.add_argument('--length', '-n', type=int, default=5, help='number of consecutive 5s-signals in one segment')
     parser.add_argument('--label', '-l', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner')
     parser.add_argument('--majority', default=False, action='store_true', help='set majority label for segments, default is last')
@@ -370,7 +371,7 @@ if __name__ == "__main__":
         raise ValueError(f'--cv must be either "kfold" or "loso", but given {args.cv}')
 
     # initialize default logger
-    logger = init_logger()
+    logger = init_logger(tz=args.timezone)
 
     # filter these RuntimeWarning messages
     warnings.filterwarnings(action='ignore', message='Mean of empty slice')

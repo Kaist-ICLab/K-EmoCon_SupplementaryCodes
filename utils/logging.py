@@ -1,15 +1,11 @@
-import time
 import pytz
 import logging
 from datetime import datetime
 
 
-def ltnow(*args, tz='Asia/Seoul'):
-    '''Returns a formatted string of local time now given a string for timezone.'''
-    return pytz.utc.localize(datetime.utcnow()).astimezone(pytz.timezone(tz)).timetuple()
+def init_logger(tz, name='default'):
+    assert tz in pytz.all_timezones_set, f'{tz} is not a valid pytz timezone'
 
-
-def init_logger(name='default'):
     # create logger
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -23,6 +19,12 @@ def init_logger(name='default'):
         fmt='[%(asctime)s] %(levelname)s - %(message)s',
         datefmt='%Y/%m/%d %H:%M:%S',
     )
+
+    # set converter for time format
+    def ltnow(*args, tz=tz):
+        '''Returns a formatted string of local time now given a string for timezone.'''
+        return pytz.utc.localize(datetime.utcnow()).astimezone(pytz.timezone(tz)).timetuple()
+
     formatter.converter = ltnow
 
     # add formatter to ch
