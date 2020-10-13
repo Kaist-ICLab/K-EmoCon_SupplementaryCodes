@@ -13,7 +13,7 @@ from numpy.random import default_rng
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
 
 from pyteap.signals.bvp import acquire_bvp, get_bvp_features
 from pyteap.signals.gsr import acquire_gsr, get_gsr_features
@@ -109,7 +109,7 @@ def get_data_rolling(segments, n, labeltype, majority):
             # curr_y.append([int(a_val > 3), int(v_val > 3)])
             curr_y.append([int(a_val >= 3), int(v_val >= 3)])
 
-        # stack features for current participant and apply min-max scaling
+        # stack features for current participant and apply standardization
         X[pid] = StandardScaler().fit_transform(np.stack(curr_X))
         y[pid] = np.stack(curr_y)
 
@@ -200,35 +200,35 @@ def prepare_kemocon(segments_dir, n, labeltype, majority, rolling):
     return X, y
 
 
+def get_results(y_test, preds, probs):
+    return {
+        'acc.': accuracy_score(y_test, preds),
+        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
+        'f1': f1_score(y_test, preds),
+        'auroc': roc_auc_score(y_test, probs),
+    }
+
+
 def pred_majority(majority, y_test):
     preds = np.repeat(majority, y_test.size)
-    res = {
-        'acc.': accuracy_score(y_test, preds),
-        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
-        'f1': f1_score(y_test, preds)
-    }
-    return res
+    probs = np.repeat(majority, y_test.size)
+    return get_results(y_test, preds, probs)
 
 
-def pred_random(y_classes, y_test, seed, rng, ratios=None):
+def pred_random(y_classes, y_test, rng, ratios=None):
     preds = rng.choice(y_classes, y_test.size, replace=True, p=ratios)
-    res = {
-        'acc.': accuracy_score(y_test, preds),
-        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
-        'f1': f1_score(y_test, preds)
-    }
-    return res
+    if ratios is not None:
+        probs = np.where(preds == 1, ratios[1], ratios[0])
+    else:
+        probs = np.repeat(0.5, y_test.size)
+    return get_results(y_test, preds, probs)
 
 
 def pred_gnb(X_train, y_train, X_test, y_test):
-    clf = GaussianNB()
-    preds = clf.fit(X_train, y_train).predict(X_test)
-    res = {
-        'acc.': accuracy_score(y_test, preds),
-        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
-        'f1': f1_score(y_test, preds)
-    }
-    return res
+    clf = GaussianNB().fit(X_train, y_train)
+    preds = clf.predict(X_test)
+    probs = clf.predict_proba(X_test)[:, 1]
+    return get_results(y_test, preds, probs)
 
 
 def pred_xgb(X_train, y_train, X_test, y_test, seed):
@@ -242,8 +242,8 @@ def pred_xgb(X_train, y_train, X_test, y_test, seed):
         'verbosity': 1,
         'max_depth': 6,
         'eta': 0.3,
-        'objective': 'multi:softmax',
-        'num_class': 2,
+        'objective': 'binary:logistic',
+        # 'num_class': 2,
         'eval_metric': 'auc',
         'seed': seed,
     }
@@ -251,15 +251,11 @@ def pred_xgb(X_train, y_train, X_test, y_test, seed):
     # train model and predict
     num_round = 100
     bst = xgb.train(params, dtrain, num_round)
-    preds = bst.predict(dtest)
+    probs = bst.predict(dtest)
+    preds = probs > 0.5
     
-    # get results
-    res = {
-        'acc.': accuracy_score(y_test, preds),
-        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
-        'f1': f1_score(y_test, preds)
-    }
-    return res
+    # return results
+    return get_results(y_test, preds, probs)
 
 
 def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
@@ -270,6 +266,7 @@ def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
     # aggregated features and labels
     X = np.concatenate(list(X.values()))
     y = np.concatenate(list(y.values()))
+    logging.getLogger('default').info(f'Dataset size: {X.shape}')
 
     # get labels corresponding to target class
     if target == 'arousal':
@@ -287,9 +284,9 @@ def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
         class_ratios = y_counts / y_train.size
 
         results[i+1] = {
-            'Random': pred_random(y_classes, y_test, seed, rng),
+            'Random': pred_random(y_classes, y_test, rng),
             'Majority': pred_majority(majority, y_test),
-            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios),
+            'Class ratio': pred_random(y_classes, y_test, rng, ratios=class_ratios),
             'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
             'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
         }
@@ -325,7 +322,7 @@ def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
         results[pid] = {
             'Random': pred_random(y_classes, y_test, seed, rng),
             'Majority': pred_majority(majority, y_test),
-            'Class ratio': pred_random(y_classes, y_test, seed, rng, ratios=class_ratios),
+            'Class ratio': pred_random(y_classes, y_test, rng, ratios=class_ratios),
             'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
             'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
         }
@@ -356,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument('--majority', default=False, action='store_true', help='set majority label for segments, default is last')
     parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ..., default is no rolling: e.g., s1=[0:n], s2=[n:2n], ...')
     parser.add_argument('--cv', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso" (leave-one-subject-out)')
-    parser.add_argument('--splits', type=int, default=5, help='number of folds for k-fold stratified classification')
+    parser.add_argument('--splits', type=int, default=5, help='number of folds for k-fold stratified classification, default is 5')
     parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle data before splitting to folds, default is no shuffle')
     args = parser.parse_args()
 
