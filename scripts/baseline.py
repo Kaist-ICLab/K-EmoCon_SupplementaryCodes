@@ -19,7 +19,7 @@ from pyteap.signals.bvp import acquire_bvp, get_bvp_features
 from pyteap.signals.gsr import acquire_gsr, get_gsr_features
 from pyteap.signals.hst import acquire_hst, get_hst_features
 from pyteap.signals.ecg import get_ecg_features
-from utils.logging import init_logger
+from ..utils.logging import init_logger
 
 
 def load_segments(segments_dir):

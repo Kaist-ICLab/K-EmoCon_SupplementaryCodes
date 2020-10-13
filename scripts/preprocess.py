@@ -7,7 +7,7 @@ import pandas as pd
 
 from collections import namedtuple
 from datetime import datetime, timedelta
-from utils.logging import init_logger
+from ..utils.logging import init_logger
 
 
 def aggregate_raw(paths, valid_pids):
