@@ -1,6 +1,6 @@
 # K-EmoCon Supplementary Codes
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3931963.svg)](https://doi.org/10.5281/zenodo.3931963)
+<!-- [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3931963.svg)](https://doi.org/10.5281/zenodo.3931963) -->
 This repository contains supplementary codes for the **K-EmoCon Dataset**.
 
 For the detailed description of the dataset, please refer to:
@@ -25,61 +25,69 @@ JSON files for biosignal segments will have names with the following pattern: fo
 The last 6 digits are multiperspective emotion annotations associated with the segment, in the order of 1) self-arousal, 2) self-valence, 3) partner-arousal, 4) partner-valence, 5) external-arousal, and 6) external-valence.
 
 ### Baseline Classification
-[baseline.py](https://github.com/cheulyop/K-EmoCon_SupplementaryCodes/blob/master/baseline.py) implements a stratified k-fold baseline classification with four simple classifiers, which are [Gaussian NB](https://scikit-learn.org/stable/modules/generated/sklearn.naive_bayes.GaussianNB.html#sklearn-naive-bayes-gaussiannb), random voter, majority voter, and class ratio voter.
+[baseline.py](https://github.com/cheulyop/K-EmoCon_SupplementaryCodes/blob/master/baseline.py) implements a stratified k-fold and leave-one-subject-out (LOSO) cross-validation for the binary classification of low and high classes (with low < 3 and high >= 3), with three simple voters (random, majority, and class ratio), [Gaussian NB](https://scikit-learn.org/stable/modules/generated/sklearn.naive_bayes.GaussianNB.html#sklearn-naive-bayes-gaussiannb), and [XGBoost](https://github.com/dmlc/xgboost).
 
-\* `baseline.py` requires [PyTEAP](https://pypi.org/project/PyTEAP/) for feature extraction. You can install it via `pip install PyTEAP`.
+\* `baseline.py` requires [PyTEAP](https://pypi.org/project/PyTEAP/) for feature extraction. You can install it by running: `pip install PyTEAP` in your terminal.
 
 ```console
 $ python baseline.py --help
-usage: baseline.py [-h] --root ROOT [--seed SEED] [--target TARGET] [--length LENGTH] [--which WHICH] [--rolling] [--no_rolling] [--splits SPLITS] [--shuffle] [--no_shuffle]
+usage: baseline.py [-h] -r ROOT [-tz TIMEZONE] [-s SEED] [-t TARGET] [-l LENGTH] [-y LABEL] [--majority] [--rolling] [--cv CV] [--splits SPLITS] [--shuffle]
 
 Preprocess K-EmoCon dataset and get baseline classification results.
 
 optional arguments:
   -h, --help            show this help message and exit
-  --root ROOT, -r ROOT  path to the dataset directory
-  --seed SEED, -s SEED  seed for random number generation
-  --target TARGET, -t TARGET
+  -r ROOT, --root ROOT  path to the dataset directory
+  -tz TIMEZONE, --timezone TIMEZONE
+                        a pytz timezone string for logger, default is UTC
+  -s SEED, --seed SEED  seed for random number generation, default is 0
+  -t TARGET, --target TARGET
                         target label for classification, must be either "valence" or "arousal"
-  --length LENGTH, -l LENGTH
-                        number of consecutive 5s-signals in one segment
-  --which WHICH, -w WHICH
-                        which label to set for segments, must be either "last" or "majority"
-  --rolling             get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ...
-  --no_rolling          get segments without rolling: e.g., s1=[0:n], s2=[n:2n], ...
-  --splits SPLITS, -k SPLITS
-                        number of fold in k-fold stratified classification
-  --shuffle             shuffle data before splitting to folds
-  --no_shuffle          don't shuffle data before splitting to folds
+  -l LENGTH, --length LENGTH
+                        number of consecutive 5s-signals in one segment, default is 5
+  -y LABEL, --label LABEL
+                        type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner
+  --majority            set majority label for segments, default is last
+  --rolling             get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ..., default is no rolling: e.g., s1=[0:n], s2=[n:2n], ...
+  --cv CV               type of cross-validation to perform, must be either "kfold" or "loso"
+  --splits SPLITS       number of folds for k-fold stratified classification, default is 5
+  --shuffle             shuffle data before splitting to folds, default is no shuffle
 ```
+---
 
-Below is a sample command to perform a *5-fold* stratified classification with *valence* as a target, for *25s rolling-based* segments, with *last labels* as segment labels, with *shuffle*, and *seed=1*:
+## Results
+
+Below are sample commands and corresponding classification results for arousal and valence, with seed = 1, segment length = 25s (5*5s, using annotation of the last segment as the segment label), label = self, rolling, 5-fold CV, and shuffle.
+
+### Arousal (5-fold CV)
 
 ```console
-$ python baseline.py --root '/path/to/kemocon_root/segments/' -seed 1 --target 'valence' --length 5 --rolling --which 'last' --shuffle
+$ python baseline.py -r /path/to/kemocon_root/segments/ -s 1 -t arousal -l 5 -y s --rolling --cv kfold --splits 5 --shuffle --gpu
 ```
+| Metric   |   Random |   Majority |   Class ratio |   Gaussian NB |   XGBoost |
+|:---------|---------:|-----------:|--------------:|--------------:|----------:|
+| acc.     | 0.503671 |   0.684578 |      0.560299 |       0.61854 |  0.80108  |
+| auroc    | 0.5      |   0.5      |      0.491283 |       0.54747 |  0.851438 |
+| bacc.    | 0.500061 |   0.5      |      0.491283 |       0.51454 |  0.729572 |
+| f1       | 0.584102 |   0.812759 |      0.67853  |       0.74067 |  0.864128 |
 
-Here are sample commands and corresponding classification results:
+### Valence (5-fold CV)
 
-#### Arousal
 ```console
-$ python baseline.py -r '/path/to/kemocon/segments/' --target "arousal" --which "last" --rolling --splits 5 --shuffle --seed 1
+$ python baseline.py -r /path/to/kemocon_root/segments/ -s 1 -t valence -l 5 -y s --rolling --cv kfold --splits 5 --shuffle --gpu
 ```
-| Metric   |   Gaussian NB |   Random |   Majority |   Class ratio |
-|:---------|--------------:|---------:|-----------:|--------------:|
-| acc.     |      0.61691  | 0.512718 |   0.662429 |      0.544286 |
-| bacc.    |      0.531167 | 0.517761 |   0.5      |      0.487093 |
-| f1       |      0.319523 | 0.424699 |   0        |      0.315257 |
+| Metric   |   Random |   Majority |   Class ratio |   Gaussian NB |   XGBoost |
+|:---------|---------:|-----------:|--------------:|--------------:|----------:|
+| acc.     | 0.520099 |   0.804348 |      0.667756 |      0.748167 |  0.851923 |
+| auroc    | 0.5      |   0.5      |      0.474616 |      0.568466 |  0.853776 |
+| bacc.    | 0.522477 |   0.5      |      0.474616 |      0.527758 |  0.646984 |
+| f1       | 0.634711 |   0.891566 |      0.793022 |      0.850216 |  0.914462 |
 
-#### Valence
-```console
-$ python baseline.py -r '/path/to/kemocon/segments/' --target "valence" --which "last" --rolling --splits 5 --shuffle --seed 1
-```
-| Metric   |   Gaussian NB |   Random |   Majority |   Class ratio |
-|:---------|--------------:|---------:|-----------:|--------------:|
-| acc.     |      0.729704 | 0.490557 |   0.760049 |      0.634928 |
-| bacc.    |      0.523319 | 0.494089 |   0.5      |      0.494309 |
-| f1       |      0.183313 | 0.32008  |   0        |      0.227544 |
+\* For the results of arousal and valence **LOSO CV**, see csv files in the `results` folder. AUROC is not calculated for participants who only hvae one class in y_true, as the [ROC AUC score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html#sklearn.metrics.roc_auc_score) is not defined in that case.
+
+* [`arousal-loso.csv`](https://github.com/cheulyop/K-EmoCon_SupplementaryCodes/blob/master/results/arousal-loso.csv)
+* [`valence-loso.csv`](https://github.com/cheulyop/K-EmoCon_SupplementaryCodes/blob/master/results/valence-loso.csv)
+---
 
 ## Supplementary Codes for the K-EmoCon Dataset Descriptor
 * [chauvenet.py](https://github.com/Kaist-ICLab/K-EmoCon_SupplementaryCodes/blob/master/chauvenet.py) - an implementation of [Chauvenet's criterion](https://en.wikipedia.org/wiki/Chauvenet%27s_criterion) for detecting outliers.
@@ -89,13 +97,3 @@ $ python baseline.py -r '/path/to/kemocon/segments/' --target "valence" --which 
   * `subtract_mode_from_values` - implements mode subtraction.
   * `compute_krippendorff_alpha` - computes Krippendorff's alpha (IRR).
   * `plot_heatmaps` - plots the IRR heatmap.
----
-
-## Changelog
-
-@Sep 23, 2020: added `baseline.py` for baseline classification.
-
-@Sep 16, 2020: added `preprocess.py` and `logging.py` for preprocessing the dataset.
-
-@Jul 7, 2020: updated `vote_majority.py`
-* Updated aggregate_by_majority_voting to support easier aggregation of external rater annotations.

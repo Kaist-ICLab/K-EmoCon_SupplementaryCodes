@@ -7,7 +7,7 @@ import pandas as pd
 
 from collections import namedtuple
 from datetime import datetime, timedelta
-from utils.logging import init_logger
+from logutils import init_logger
 
 
 def aggregate_raw(paths, valid_pids):
@@ -283,10 +283,11 @@ if __name__ == "__main__":
     # initialize parser
     parser = argparse.ArgumentParser(description='Preprocess K-EmoCon dataset and save BVP, EDA, HST, and ECG signals as JSON files.')
     parser.add_argument('--root', '-r', type=str, required=True, help='a path to a root directory for the dataset')
+    parser.add_argument('--timezone', '-t', type=str, default='UTC', help='a pytz timezone string for logger, default is UTC')
     args = parser.parse_args()
 
     # initialize default logger and constants
-    logger = init_logger()
+    logger = init_logger(tz=args.timezone)
     logger.info(f'Read/writing files to {args.root}...')
     PATHS = {
         'e4_dir': os.path.expanduser(os.path.join(args.root, 'raw/e4_data')),
