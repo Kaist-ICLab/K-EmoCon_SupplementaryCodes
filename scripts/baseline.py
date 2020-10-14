@@ -19,7 +19,7 @@ from pyteap.signals.bvp import acquire_bvp, get_bvp_features
 from pyteap.signals.gsr import acquire_gsr, get_gsr_features
 from pyteap.signals.hst import acquire_hst, get_hst_features
 from pyteap.signals.ecg import get_ecg_features
-from ..utils.logging import init_logger
+from logutils import init_logger
 
 
 def load_segments(segments_dir):
@@ -201,12 +201,16 @@ def prepare_kemocon(segments_dir, n, labeltype, majority, rolling):
 
 
 def get_results(y_test, preds, probs):
-    return {
-        'acc.': accuracy_score(y_test, preds),
-        'bacc.': balanced_accuracy_score(y_test, preds, adjusted=False),
-        'f1': f1_score(y_test, preds),
-        'auroc': roc_auc_score(y_test, probs),
-    }
+    acc = accuracy_score(y_test, preds)
+    bacc = balanced_accuracy_score(y_test, preds, adjusted=False)
+    f1 = f1_score(y_test, preds)
+    try:
+        auroc = roc_auc_score(y_test, probs)
+    except ValueError as err:
+        logging.getLogger('default').error(err)
+        auroc = np.nan
+
+    return {'acc.': acc, 'bacc.': bacc, 'f1': f1, 'auroc': auroc}
 
 
 def pred_majority(majority, y_test):
@@ -231,7 +235,7 @@ def pred_gnb(X_train, y_train, X_test, y_test):
     return get_results(y_test, preds, probs)
 
 
-def pred_xgb(X_train, y_train, X_test, y_test, seed):
+def pred_xgb(X_train, y_train, X_test, y_test, seed, gpu):
     # load data into DMatrix
     dtrain = xgb.DMatrix(X_train, label=y_train)
     dtest = xgb.DMatrix(X_test, label=y_test)
@@ -248,6 +252,11 @@ def pred_xgb(X_train, y_train, X_test, y_test, seed):
         'seed': seed,
     }
 
+    # if gpu=True
+    if gpu:
+        params['gpu_id'] = 0
+        params['tree_method'] = 'gpu_hist'
+
     # train model and predict
     num_round = 100
     bst = xgb.train(params, dtrain, num_round)
@@ -258,7 +267,7 @@ def pred_xgb(X_train, y_train, X_test, y_test, seed):
     return get_results(y_test, preds, probs)
 
 
-def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
+def get_baseline_kfold(X, y, seed, target, n_splits, shuffle, gpu):
     # initialize random number generator and fold generator
     rng = default_rng(seed)
     skf = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=seed)
@@ -288,7 +297,7 @@ def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
             'Majority': pred_majority(majority, y_test),
             'Class ratio': pred_random(y_classes, y_test, rng, ratios=class_ratios),
             'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
-            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
+            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed, gpu),
         }
 
     # return results as table
@@ -297,7 +306,7 @@ def get_baseline_kfold(X, y, seed, target, n_splits, shuffle):
     return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB', 'XGBoost']]
 
 
-def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
+def get_baseline_loso(X, y, seed, target, n_splits, shuffle, gpu):
     # initialize random number generator
     rng = default_rng(seed)
 
@@ -320,11 +329,11 @@ def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
 
         # get classification results
         results[pid] = {
-            'Random': pred_random(y_classes, y_test, seed, rng),
+            'Random': pred_random(y_classes, y_test, rng),
             'Majority': pred_majority(majority, y_test),
             'Class ratio': pred_random(y_classes, y_test, rng, ratios=class_ratios),
             'Gaussian NB': pred_gnb(X_train, y_train, X_test, y_test),
-            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed),
+            'XGBoost': pred_xgb(X_train, y_train, X_test, y_test, seed, gpu),
         }
 
     results = {(pid, classifier): value for (pid, _results) in results.items() for (classifier, value) in _results.items()}
@@ -332,11 +341,11 @@ def get_baseline_loso(X, y, seed, target, n_splits, shuffle):
     return results_table[['Random', 'Majority', 'Class ratio', 'Gaussian NB', 'XGBoost']]
 
 
-def get_baseline(X, y, seed, target, cv, n_splits, shuffle):
+def get_baseline(X, y, seed, target, cv, n_splits, shuffle, gpu):
     if cv == 'kfold':
-        results = get_baseline_kfold(X, y, seed, target, n_splits, shuffle)
+        results = get_baseline_kfold(X, y, seed, target, n_splits, shuffle, gpu)
     elif cv == 'loso':
-        results = get_baseline_loso(X, y, seed, target, n_splits, shuffle)
+        results = get_baseline_loso(X, y, seed, target, n_splits, shuffle, gpu)
 
     return results
 
@@ -344,17 +353,18 @@ def get_baseline(X, y, seed, target, cv, n_splits, shuffle):
 if __name__ == "__main__":
     # initialize parser
     parser = argparse.ArgumentParser(description='Preprocess K-EmoCon dataset and get baseline classification results.')
-    parser.add_argument('--root', '-r', type=str, required=True, help='path to the dataset directory')
-    parser.add_argument('--timezone', '-t', type=str, default='UTC', help='a pytz timezone string for logger, default is UTC')
-    parser.add_argument('--seed', '-s', type=int, default=0, help='seed for random number generation')
-    parser.add_argument('--target', '-g', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
-    parser.add_argument('--length', '-n', type=int, default=5, help='number of consecutive 5s-signals in one segment')
-    parser.add_argument('--label', '-l', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner')
+    parser.add_argument('-r', '--root', type=str, required=True, help='path to the dataset directory')
+    parser.add_argument('-tz', '--timezone', type=str, default='UTC', help='a pytz timezone string for logger, default is UTC')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='seed for random number generation, default is 0')
+    parser.add_argument('-t', '--target', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
+    parser.add_argument('-l', '--length', type=int, default=5, help='number of consecutive 5s-signals in one segment, default is 5')
+    parser.add_argument('-y', '--label', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner')
     parser.add_argument('--majority', default=False, action='store_true', help='set majority label for segments, default is last')
     parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ..., default is no rolling: e.g., s1=[0:n], s2=[n:2n], ...')
-    parser.add_argument('--cv', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso" (leave-one-subject-out)')
+    parser.add_argument('--cv', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso"')
     parser.add_argument('--splits', type=int, default=5, help='number of folds for k-fold stratified classification, default is 5')
     parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle data before splitting to folds, default is no shuffle')
+    parser.add_argument('--gpu', default=False, action='store_true', help='if True, use available GPU for XGBoost')
     args = parser.parse_args()
 
     # check commandline arguments
@@ -378,12 +388,12 @@ if __name__ == "__main__":
 
     # get features and labels
     segments_dir = os.path.expanduser(args.root)
-    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, majority={args.majority}, rolling={args.rolling}, cv={args.cv}, splits={args.splits}, shuffle={args.shuffle}')
+    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, majority={args.majority}, rolling={args.rolling}, cv={args.cv}, splits={args.splits}, shuffle={args.shuffle}, gpu={args.gpu}')
     features, labels = prepare_kemocon(segments_dir, args.length, args.label, args.majority, args.rolling)
     logger.info('Processing complete.')
 
     # get classification results
-    results = get_baseline(features, labels, args.seed, args.target, args.cv, args.splits, args.shuffle)
+    results = get_baseline(features, labels, args.seed, args.target, args.cv, args.splits, args.shuffle, args.gpu)
     
     # print summary of classification results
     if args.cv == 'kfold':
