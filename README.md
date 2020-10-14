@@ -1,6 +1,6 @@
 # K-EmoCon Supplementary Codes
 
-<!-- [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3931963.svg)](https://doi.org/10.5281/zenodo.3931963) -->
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3931963.svg)](https://doi.org/10.5281/zenodo.3931963)
 This repository contains supplementary codes for the **K-EmoCon Dataset**.
 
 For the detailed description of the dataset, please refer to:
