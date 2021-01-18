@@ -13,7 +13,7 @@ from collections import OrderedDict, Counter
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score, average_precision_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score, average_precision_score, confusion_matrix
 
 from pyteap.signals.bvp import acquire_bvp, get_bvp_features
 from pyteap.signals.gsr import acquire_gsr, get_gsr_features
@@ -364,7 +364,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--seed', type=int, default=0, help='seed for random number generation, default is 0')
     parser.add_argument('-t', '--target', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
     parser.add_argument('-l', '--length', type=int, default=5, help='number of consecutive 5s-signals in one segment, default is 5')
-    parser.add_argument('-y', '--label', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner')
+    parser.add_argument('-y', '--label', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner (default="s")')
     parser.add_argument('--majority', default=False, action='store_true', help='set majority label for segments, default is last')
     parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ..., default is no rolling: e.g., s1=[0:n], s2=[n:2n], ...')
     parser.add_argument('--pos_label', type=str, default='high', help='if "high" high ratings (> 2) will correspond to 1 in labels, else low ratings (<= 2) will correspond to 1 in labels')
@@ -405,10 +405,9 @@ if __name__ == "__main__":
     
     # save summary of classification results as csv files
     if args.cv == 'kfold':
-        savepath = os.path.join(args.savedir, f'{args.target}-{args.pos_label}-kfold.csv')
+        savefile = f'seed={args.seed}_target={args.target}_len={args.length*5}_label={args.label}_{"majority" if args.majority else "last"}_{"rolling" if args.rolling else "discrete"}_k={args.splits}_{"shuffle" if args.shuffle else "no-shuffle"}.csv'
+        savepath = os.path.join(args.savedir, savefile)
         results.groupby(level='Metric').mean().to_csv(savepath)
     else:
         savepath = os.path.join(args.savedir, f'{args.target}-{args.pos_label}-loso.csv')
         results.to_csv(savepath)
-
-    print(savepath)

@@ -83,7 +83,7 @@ $ python baseline.py -r /path/to/kemocon_root/segments/ -s 1 -t valence -l 5 -y 
 | bacc.    | 0.522477 |   0.5      |      0.474616 |      0.527758 |  0.646984 |
 | f1       | 0.634711 |   0.891566 |      0.793022 |      0.850216 |  0.914462 |
 
-\* For the results of arousal and valence **LOSO CV**, see csv files in the `results` folder. AUROC is not calculated for participants who only hvae one class in y_true, as the [ROC AUC score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html#sklearn.metrics.roc_auc_score) is not defined in that case.
+\* For the results of arousal and valence **LOSO CV**, see csv files in the `results` folder. AUROC is not calculated for participants who only have one class in y_true, as the [ROC AUC score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html#sklearn.metrics.roc_auc_score) is not defined in that case.
 
 * [`arousal-loso.csv`](https://github.com/cheulyop/K-EmoCon_SupplementaryCodes/blob/master/results/arousal-loso.csv)
 * [`valence-loso.csv`](https://github.com/cheulyop/K-EmoCon_SupplementaryCodes/blob/master/results/valence-loso.csv)
