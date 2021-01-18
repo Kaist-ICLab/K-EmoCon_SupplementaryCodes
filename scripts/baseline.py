@@ -6,14 +6,14 @@ import warnings
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-
 from tqdm import tqdm
-from collections import OrderedDict
 from numpy.random import default_rng
+from collections import OrderedDict, Counter
+
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score, average_precision_score, confusion_matrix
 
 from pyteap.signals.bvp import acquire_bvp, get_bvp_features
 from pyteap.signals.gsr import acquire_gsr, get_gsr_features
@@ -58,7 +58,7 @@ def get_features(sig, sr, sigtype):
     return features
 
 
-def get_data_rolling(segments, n, labeltype, majority):
+def get_data_rolling(segments, n, labeltype, majority, pos_label):
     X, y = {}, {}
 
     # for each participant
@@ -106,8 +106,10 @@ def get_data_rolling(segments, n, labeltype, majority):
                 a_val, v_val = curr_a[-1], curr_v[-1]
 
             curr_X.append(features)
-            # curr_y.append([int(a_val > 3), int(v_val > 3)])
-            curr_y.append([int(a_val >= 3), int(v_val >= 3)])
+            if pos_label == 'high':
+                curr_y.append([int(a_val > 2), int(v_val > 2)])
+            else:
+                curr_y.append([int(a_val <= 2), int(v_val <= 2)])
 
         # stack features for current participant and apply standardization
         X[pid] = StandardScaler().fit_transform(np.stack(curr_X))
@@ -116,7 +118,7 @@ def get_data_rolling(segments, n, labeltype, majority):
     return X, y
 
 
-def get_data_discrete(segments, n, labeltype, majority):
+def get_data_discrete(segments, n, labeltype, majority, pos_label):
     X, y = {}, {}
 
     # for each participant
@@ -176,26 +178,29 @@ def get_data_discrete(segments, n, labeltype, majority):
                     v_val = curr_segs.pop('v')[-1]
                 
                 curr_X.append(features)
-                curr_y.append([int(a_val > 3), int(v_val > 3)])
-                # curr_y.append([int(a_val >= 3), int(v_val >= 3)])
+                if pos_label == 'high':
+                    curr_y.append([int(a_val > 2), int(v_val > 2)])
+                else:
+                    curr_y.append([int(a_val <= 2), int(v_val <= 2)])
+
                 pbar.set_postfix({'processed': idx // n})
 
-        # stack features for current participant and apply min-max scaling
+        # stack features for current participant and apply standardization
         X[pid] = StandardScaler().fit_transform(np.stack(curr_X))
         y[pid] = np.stack(curr_y)
 
     return X, y
 
 
-def prepare_kemocon(segments_dir, n, labeltype, majority, rolling):
+def prepare_kemocon(segments_dir, n, labeltype, majority, rolling, pos_label):
     # load segments
     pid_to_segments = load_segments(segments_dir)
 
     # extract features and labels
     if rolling:
-        X, y = get_data_rolling(pid_to_segments, n, labeltype, majority)
+        X, y = get_data_rolling(pid_to_segments, n, labeltype, majority, pos_label)
     else:
-        X, y = get_data_discrete(pid_to_segments, n, labeltype, majority)
+        X, y = get_data_discrete(pid_to_segments, n, labeltype, majority, pos_label)
 
     return X, y
 
@@ -203,14 +208,11 @@ def prepare_kemocon(segments_dir, n, labeltype, majority, rolling):
 def get_results(y_test, preds, probs):
     acc = accuracy_score(y_test, preds)
     bacc = balanced_accuracy_score(y_test, preds, adjusted=False)
-    f1 = f1_score(y_test, preds)
-    try:
-        auroc = roc_auc_score(y_test, probs)
-    except ValueError as err:
-        logging.getLogger('default').error(err)
-        auroc = np.nan
+    f1 = f1_score(y_test, preds, average='weighted')
+    auroc = roc_auc_score(y_test, probs, average='weighted')
+    ap = average_precision_score(y_test, probs, average='weighted')
 
-    return {'acc.': acc, 'bacc.': bacc, 'f1': f1, 'auroc': auroc}
+    return {'acc.': acc, 'bacc.': bacc, 'f1': f1, 'auroc': auroc, 'ap': ap}
 
 
 def pred_majority(majority, y_test):
@@ -322,6 +324,10 @@ def get_baseline_loso(X, y, seed, target, n_splits, shuffle, gpu):
         elif target == 'valence':
             y_train, y_test = y_train[:, 1], y_test[:, 1]
 
+        # skip current user if there aren't both labels (0, 1) in the test set
+        if len(Counter(y_test)) != 2:
+            continue
+
         # get majority label and class ratios
         y_classes, y_counts = np.unique(y_train, return_counts=True)
         majority = y_classes[np.argmax(y_counts)]
@@ -358,12 +364,14 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--seed', type=int, default=0, help='seed for random number generation, default is 0')
     parser.add_argument('-t', '--target', type=str, default='valence', help='target label for classification, must be either "valence" or "arousal"')
     parser.add_argument('-l', '--length', type=int, default=5, help='number of consecutive 5s-signals in one segment, default is 5')
-    parser.add_argument('-y', '--label', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner')
+    parser.add_argument('-y', '--label', type=str, default='s', help='type of label to use for classification, must be either "s"=self, "p"=partner, "e"=external, or "sp"=self+partner (default="s")')
     parser.add_argument('--majority', default=False, action='store_true', help='set majority label for segments, default is last')
     parser.add_argument('--rolling', default=False, action='store_true', help='get segments with rolling: e.g., s1=[0:n], s2=[1:n+1], ..., default is no rolling: e.g., s1=[0:n], s2=[n:2n], ...')
+    parser.add_argument('--pos_label', type=str, default='high', help='if "high" high ratings (> 2) will correspond to 1 in labels, else low ratings (<= 2) will correspond to 1 in labels')
     parser.add_argument('--cv', type=str, default='kfold', help='type of cross-validation to perform, must be either "kfold" or "loso"')
     parser.add_argument('--splits', type=int, default=5, help='number of folds for k-fold stratified classification, default is 5')
     parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle data before splitting to folds, default is no shuffle')
+    parser.add_argument('--savedir', type=str, default='../results/', help='path to the directory to save classification results')
     parser.add_argument('--gpu', default=False, action='store_true', help='if True, use available GPU for XGBoost')
     args = parser.parse_args()
 
@@ -388,15 +396,18 @@ if __name__ == "__main__":
 
     # get features and labels
     segments_dir = os.path.expanduser(args.root)
-    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, majority={args.majority}, rolling={args.rolling}, cv={args.cv}, splits={args.splits}, shuffle={args.shuffle}, gpu={args.gpu}')
-    features, labels = prepare_kemocon(segments_dir, args.length, args.label, args.majority, args.rolling)
+    logger.info(f'Processing segments from {segments_dir}, with: seed={args.seed}, target={args.target}, length={args.length*5}s, label={args.label}, majority={args.majority}, rolling={args.rolling}, pos_label={args.pos_label}, cv={args.cv}, splits={args.splits}, shuffle={args.shuffle}, gpu={args.gpu}')
+    features, labels = prepare_kemocon(segments_dir, args.length, args.label, args.majority, args.rolling, args.pos_label)
     logger.info('Processing complete.')
 
     # get classification results
     results = get_baseline(features, labels, args.seed, args.target, args.cv, args.splits, args.shuffle, args.gpu)
     
-    # print summary of classification results
+    # save summary of classification results as csv files
     if args.cv == 'kfold':
-        print(results.groupby(level='Metric').mean())
+        savefile = f'seed={args.seed}_target={args.target}_len={args.length*5}_label={args.label}_{"majority" if args.majority else "last"}_{"rolling" if args.rolling else "discrete"}_k={args.splits}_{"shuffle" if args.shuffle else "no-shuffle"}.csv'
+        savepath = os.path.join(args.savedir, savefile)
+        results.groupby(level='Metric').mean().to_csv(savepath)
     else:
-        print(results)
+        savepath = os.path.join(args.savedir, f'{args.target}-{args.pos_label}-loso.csv')
+        results.to_csv(savepath)
